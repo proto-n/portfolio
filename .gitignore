@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# database, server log (your portfolio data lives here)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# broker / Kincstár exports: names, account numbers, full transaction history
+*.csv
+*.xls
+*.xlsx
+
+# local config / secrets (e.g. PORTFOLIO_PASSWORD)
+.env
+.env.*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

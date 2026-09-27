@@ -1,0 +1,18 @@
+{
+  "name": "portfolio",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "snapshot": "node --disable-warning=ExperimentalWarning src/snapshot.js",
+    "import-ibkr": "node --disable-warning=ExperimentalWarning src/import-ibkr.js",
+    "import-mak": "node --disable-warning=ExperimentalWarning src/import-mak.js"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  }
+}
