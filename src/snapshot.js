@@ -13,8 +13,11 @@ export async function recordSnapshot() {
     for (const o of a.options) {
       if (o.value_usd == null) continue;
       rows.push(['option', `opt:${o.id}`, o.symbol, o.value_usd, 'USD', o.value_huf ?? 0]);
+      // IV history comes from the market quote itself, dated when it was taken (an estimate
+      // only reuses that quote's IV, so recording it would fake a flat vol history).
+      const s = o.quote.source;
       run('INSERT OR REPLACE INTO option_snapshots (date, option_id, underlying, mid, iv) VALUES (?, ?, ?, ?, ?)',
-        r.asOf, o.id, o.underlying_price, o.quote.mid, o.iv);
+        s.date, o.id, s.underlying, s.mid, s.iv);
     }
   }
   db.exec('BEGIN');

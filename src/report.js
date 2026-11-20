@@ -1,6 +1,6 @@
 import { all, get, run, getSettings } from './db.js';
 import { today, daysBetween, xirr, bs, impliedVol, attribute, bondValue } from './calc.js';
-import { yahooQuote, yahoo52wHigh, hufRate, hufRateOn, cboeOptions, cboeLongDated, occSymbol, underlyingOn } from './prices.js';
+import { yahooQuote, yahoo52wHigh, hufRate, hufRateOn, optionQuotes, longDatedChain, occSymbol, underlyingOn } from './prices.js';
 
 export async function buildReport() {
   const settings = getSettings();
@@ -216,24 +216,39 @@ async function analyzeOption(o, asOf, settings, toHuf, warnings) {
     else warnings.push(`Could not look up ${o.underlying} on ${o.purchase_date}; enter it manually`);
   }
 
-  const chain = await cboeOptions(o.underlying, [sym]);
-  const c = chain?.contracts?.[sym];
+  const chain = await optionQuotes(o.underlying, [sym]);
+  let c = chain?.contracts?.[sym];
   if (!c) { warnings.push(`No quote for ${sym}`); return res; }
-  if (chain.stale) warnings.push(`${sym} quote is stale`);
+  if (chain.stale) warnings.push(`Option quotes unavailable; using the cached ${sym} quote`);
 
-  const S = chain.underlying;
-  const mid = c.bid > 0 && c.ask > 0 ? (c.bid + c.ask) / 2 : (c.theo || c.last_trade_price);
+  let S = chain.underlying;
+  let mid = c.bid > 0 && c.ask > 0 ? (c.bid + c.ask) / 2 : c.last_trade_price;
   const T = Math.max(daysBetween(asOf, o.expiry), 0) / 365;
-  const sigma = impliedVol(mid, { ...base, S, T }) ?? c.iv;
+  let sigma = impliedVol(mid, { ...base, S, T }) ?? c.iv;
+  // the quote as taken: kept for the IV history, and the anchor for an estimate
+  const quoteDate = new Date(chain.updatedTs).toLocaleDateString('sv-SE');
+  const sigmaQ = impliedVol(mid, { ...base, S, T: Math.max(daysBetween(quoteDate, o.expiry), 0) / 365 }) ?? c.iv;
+  const source = { date: quoteDate, underlying: S, mid, iv: sigmaQ };
+  let estimated = false;
+
+  // Quote older than the index (free/trial plans only serve the last closed session, or the feed
+  // failed): reprice at the live index level, holding the quote's IV (sticky strike).
+  const live = await liveUnderlying(o.underlying);
+  if (live && sigmaQ != null && live.time - chain.updatedTs > 60 * 60 * 1000) {
+    const est = bs({ ...base, S: live.price, T, sigma: sigmaQ }).price;
+    const shift = est - mid;
+    c = { ...c, bid: c.bid + shift, ask: c.ask + shift }; // keep the quoted spread around the estimate
+    S = live.price; mid = est; sigma = sigmaQ; estimated = true;
+    warnings.push(`${sym}: latest quote is from ${new Date(chain.updatedTs).toLocaleString('sv-SE')}; value ESTIMATED from ${o.underlying} ${live.price.toFixed(2)} at that quote's IV ${(sigmaQ * 100).toFixed(1)}%`);
+  }
   const g = bs({ ...base, S, T, sigma });
 
   Object.assign(res, {
-    quote: { bid: c.bid, ask: c.ask, mid, last: c.last_trade_price, cboe_iv: c.iv, cboe_delta: c.delta, timestamp: chain.timestamp },
+    quote: { bid: c.bid, ask: c.ask, mid, last: c.last_trade_price, market_iv: c.iv, market_delta: c.delta, timestamp: chain.timestamp, estimated, source },
     underlying_price: S,
     otm_pct: o.right === 'P' ? (S - o.strike) / S : (o.strike - S) / S,
     dte: Math.round(T * 365),
     iv: sigma,
-    iv30_index: chain.iv30,
     greeks: { delta: g.delta, gamma: g.gamma, theta_day_usd: g.theta * n, vega_usd: g.vega * n, delta_usd_per_1pct: g.delta * S * 0.01 * n },
     cost_usd: o.purchase_price * n + o.fees,
     value_usd: mid * n,
@@ -295,6 +310,13 @@ async function analyzeOption(o, asOf, settings, toHuf, warnings) {
   return res;
 }
 
+// Live index level from Yahoo. XSP is defined as SPX/10, and ^GSPC is fresher than Yahoo's ^XSP.
+async function liveUnderlying(u) {
+  const [sym, div] = u === 'XSP' ? ['^GSPC', 10] : u === 'SPX' ? ['^GSPC', 1] : [`^${u}`, 1];
+  const q = await yahooQuote(sym);
+  return q && !q.stale && q.price ? { price: q.price / div, time: q.time } : null;
+}
+
 // Put-sell trigger: sell into the panic, before a quick rebound takes the gain back.
 // Each component is 0 (calm) .. 1 (its threshold reached); the gauge is the closest one.
 async function sellTrigger(o, res, c, settings, toHuf, warnings) {
@@ -340,9 +362,12 @@ export async function rollAnalysis(optionId) {
   if (!fx) throw new Error('no USD/HUF rate');
 
   const sym = occSymbol(o);
-  const cur = (await cboeOptions(o.underlying, [sym]))?.contracts?.[sym];
   const minExpiry = new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10);
-  const chain = await cboeLongDated(o.underlying, o.right, minExpiry);
+  const q = await optionQuotes(o.underlying, [sym]);
+  const spot = q?.underlying ?? (await liveUnderlying(o.underlying))?.price;
+  const chain = spot ? await longDatedChain(o.underlying, o.right, minExpiry, spot) : null;
+  // current contract from the chain itself when listed, so all prices are from the same moment
+  const cur = chain?.contracts.find((c) => c.symbol === sym) ?? q?.contracts?.[sym];
   if (!cur || !chain) throw new Error('option chain unavailable');
   const S = chain.underlying;
   const P0 = o.purchase_price;

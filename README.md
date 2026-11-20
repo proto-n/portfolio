@@ -74,7 +74,7 @@ after a step-up coupon changes.
 ## Data sources
 
 - Yahoo Finance chart API: ETF prices (`VWCE.DE`, `FOLOW.PA`), crypto (`ETH-USD`…), FX (`EURHUF=X`, `USDHUF=X`), historical FX per lot and index level at option purchase. For individual bonds without a Yahoo symbol, leave the symbol blank and set a manual price.
-- CBOE delayed quotes (`cdn.cboe.com/.../_XSP.json`): option bid/ask/IV/greeks + underlying.
+- marketdata.app (`MARKETDATA_TOKEN` in `.env`): option bid/ask/IV + underlying, and the long-dated chain for the roll analysis. Free/trial plans only serve the last closed session; then the held option is repriced at the live index (Yahoo) with that quote's IV and flagged ESTIMATED. (CBOE's free delayed feed, used before, is blocked since 2026-11-19.)
 - HU govt bonds: no feed; value = nominal × clean price % + accrued interest since last coupon (schedule counted back from maturity).
 
 Prices are cached in SQLite (10 min quotes, 15 min option chain); failures fall back to the last cached value with a warning.
@@ -82,5 +82,5 @@ Prices are cached in SQLite (10 min quotes, 15 min option chain); failures fall 
 ## Calculations
 
 - **Yearly (XIRR)**: the fixed annual rate at which the exact cash you put in (on those dates) would grow into today's value. Per lot, per instrument, per account, and across accounts; both in instrument currency and in HUF (each lot converted at its day's FX rate, stored on the lot).
-- **Option attribution**: Black-Scholes with IV implied from each observed price (purchase price + index at purchase; nightly snapshots; current CBOE mid). The change is split into time decay / underlying move / IV change with a Shapley average over all orderings, so the parts sum exactly to the price change. r and dividend yield are in Settings.
+- **Option attribution**: Black-Scholes with IV implied from each observed price (purchase price + index at purchase; nightly snapshots; current market mid). The change is split into time decay / underlying move / IV change with a Shapley average over all orderings, so the parts sum exactly to the price change. r and dividend yield are in Settings.
 - **Crypto after tax**: value × `crypto_keep_ratio` (0.85).

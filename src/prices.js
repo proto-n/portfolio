@@ -1,4 +1,4 @@
-// Market data: Yahoo Finance (ETFs, crypto, FX, index history) and CBOE delayed
+// Market data: Yahoo Finance (ETFs, crypto, FX, index history) and marketdata.app
 // option quotes. Everything is cached in SQLite; on fetch failure we fall back to
 // the last cached value and mark it stale.
 import net from 'node:net';
@@ -9,8 +9,8 @@ net.setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (portfolio-tracker)' };
 const QUOTE_TTL = 10 * 60 * 1000;
-// The delayed option file only changes while US markets are open, so outside those hours
-// there's no point re-downloading its ~7 MB.
+// Option prices only change while US markets are open, so outside those hours there's no
+// point spending API credits on them.
 function usMarketOpen(now = new Date()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' })
     .formatToParts(now).map((x) => [x.type, x.value]));
@@ -20,9 +20,10 @@ function usMarketOpen(now = new Date()) {
 }
 const chainTtl = () => (usMarketOpen() ? 30 * 60 * 1000 : 6 * 60 * 60 * 1000);
 
+// ttl: milliseconds, or a function of the cached value returning milliseconds.
 async function cached(key, ttl, fetcher) {
   const row = db.prepare('SELECT json, ts FROM price_cache WHERE key = ?').get(key);
-  if (row && Date.now() - row.ts < ttl) return { ...JSON.parse(row.json), stale: false };
+  if (row && Date.now() - row.ts < (typeof ttl === 'function' ? ttl(JSON.parse(row.json)) : ttl)) return { ...JSON.parse(row.json), stale: false };
   try {
     const val = await fetcher();
     db.prepare('INSERT OR REPLACE INTO price_cache (key, json, ts) VALUES (?, ?, ?)').run(key, JSON.stringify(val), Date.now());
@@ -109,51 +110,68 @@ export async function hufRateOn(ccy, date) {
   return yahooCloseOn(`${ccy}HUF=X`, date);
 }
 
-// CBOE delayed chain (~7 MB); we only keep the underlying and the contracts we hold.
 export function occSymbol(o) {
   const d = o.expiry.replace(/-/g, '').slice(2);
   const strike = String(Math.round(o.strike * 1000)).padStart(8, '0');
   return `${o.underlying}${d}${o.right}${strike}`;
 }
 
-// Raw chain download (~7 MB), shared briefly in memory so parallel callers fetch once.
-const rawChains = new Map();
-function cboeRaw(underlying) {
-  const hit = rawChains.get(underlying);
-  if (hit && Date.now() - hit.at < 60_000) return hit.promise;
-  const idx = ['SPX', 'XSP', 'NDX', 'RUT', 'VIX'].includes(underlying) ? `_${underlying}` : underlying;
-  const promise = getJson(`https://cdn.cboe.com/api/global/delayed_quotes/options/${idx}.json`);
-  promise.catch(() => rawChains.delete(underlying));
-  rawChains.set(underlying, { at: Date.now(), promise });
-  return promise;
+// ---------- marketdata.app options (CBOE's free delayed feed is blocked since 2026-11-19) ----------
+// Token in MARKETDATA_TOKEN. Free/trial plans only ever get the last closed session; paid plans
+// get 15-min delayed quotes, and mode=cached prices a whole chain at 1 credit instead of 1/contract.
+async function md(path, params = {}) {
+  const token = process.env.MARKETDATA_TOKEN;
+  if (!token) throw new Error('MARKETDATA_TOKEN not set');
+  const res = await fetch(`https://api.marketdata.app/v1${path}?${new URLSearchParams(params)}`, {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000),
+  });
+  if (res.status === 204) return null; // mode=cached miss
+  const j = await res.json().catch(() => null);
+  if (!res.ok || j?.s !== 'ok') throw new Error(`marketdata ${path}: HTTP ${res.status} ${j?.errmsg || j?.s || ''}`);
+  const cols = Object.keys(j).filter((k) => Array.isArray(j[k])); // columnar -> rows
+  return j[cols[0]].map((_, i) => Object.fromEntries(cols.map((k) => [k, j[k][i]])));
 }
 
-export async function cboeOptions(underlying, symbols) {
-  const key = `cboe:${underlying}:${[...symbols].sort().join(',')}`;
-  return cached(key, chainTtl(), async () => {
-    const j = await cboeRaw(underlying);
-    const want = new Set(symbols);
+function mdContract(r) {
+  const m = /(\d{2})(\d{2})(\d{2})[CP]\d{8}$/.exec(r.optionSymbol);
+  return {
+    symbol: r.optionSymbol, expiry: `20${m[1]}-${m[2]}-${m[3]}`, strike: r.strike,
+    bid: r.bid, ask: r.ask, last_trade_price: r.last, iv: r.iv, delta: r.delta, open_interest: r.openInterest,
+  };
+}
+
+// Quotes for the contracts we hold: 1 credit per contract.
+export function optionQuotes(underlying, symbols) {
+  return cached(`md:${[...symbols].sort().join(',')}`, () => (usMarketOpen() ? QUOTE_TTL : 6 * 3600e3), async () => {
     const contracts = {};
-    for (const o of j.data.options) if (want.has(o.option)) contracts[o.option] = o;
-    return { underlying: j.data.current_price, timestamp: j.timestamp, iv30: j.data.iv30, contracts };
+    let S = null, updated = 0;
+    for (const s of symbols) {
+      const [r] = (await md(`/options/quotes/${s}/`)) || [];
+      if (!r) continue;
+      contracts[s] = mdContract(r);
+      S = r.underlyingPrice; updated = Math.max(updated, r.updated);
+    }
+    if (!Object.keys(contracts).length) throw new Error('no quotes');
+    return { underlying: S, updatedTs: updated * 1000, timestamp: new Date(updated * 1000).toISOString(), contracts };
   });
 }
 
 // Long-dated contracts of one type (P/C) with strikes within 40%-110% of spot, for roll analysis.
-export async function cboeLongDated(underlying, right, minExpiry) {
-  return cached(`cboe-long:${underlying}:${right}:${minExpiry}`, chainTtl(), async () => {
-    const j = await cboeRaw(underlying);
-    const S = j.data.current_price;
-    const re = new RegExp(`^${underlying}(\\d{2})(\\d{2})(\\d{2})${right}(\\d{8})$`);
-    const contracts = [];
-    for (const o of j.data.options) {
-      const m = re.exec(o.option);
-      if (!m) continue;
-      const expiry = `20${m[1]}-${m[2]}-${m[3]}`, strike = Number(m[4]) / 1000;
-      if (expiry < minExpiry || strike < S * 0.4 || strike > S * 1.1 || !(o.bid > 0 && o.ask > 0)) continue;
-      contracts.push({ symbol: o.option, expiry, strike, bid: o.bid, ask: o.ask, open_interest: o.open_interest });
-    }
-    return { underlying: S, timestamp: j.timestamp, contracts };
+// That's ~1,300 contracts: 1 credit with mode=cached (paid plans), ~1,300 credits without, so
+// without cached mode (free/trial: last-session data anyway) refresh at most every 6 hours.
+export function longDatedChain(underlying, right, minExpiry, spot) {
+  const ttl = (v) => (v.cachedMode ? chainTtl() : 6 * 3600e3);
+  return cached(`md-long:${underlying}:${right}`, ttl, async () => {
+    const params = {
+      side: right === 'P' ? 'put' : 'call', from: minExpiry, minBid: 0.01,
+      strike: `${Math.floor(spot * 0.4)}-${Math.ceil(spot * 1.1)}`,
+    };
+    let rows = null, cachedMode = true;
+    try { rows = await md(`/options/chain/${underlying}/`, { ...params, mode: 'cached' }); } catch { /* 402: plan has no cached mode */ }
+    if (!rows) { cachedMode = false; rows = await md(`/options/chain/${underlying}/`, params); }
+    const contracts = rows.map(mdContract).filter((c) => c.expiry >= minExpiry && c.bid > 0 && c.ask > 0);
+    const updated = Math.max(...rows.map((r) => r.updated));
+    return { underlying: rows[0]?.underlyingPrice, updatedTs: updated * 1000, timestamp: new Date(updated * 1000).toISOString(), cachedMode, contracts };
   });
 }
 

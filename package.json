@@ -1,8 +1,8 @@
 {
   "name": "portfolio",
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning server.js",
-    "snapshot": "node --disable-warning=ExperimentalWarning src/snapshot.js",
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning server.js",
+    "snapshot": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/snapshot.js",
     "import-ibkr": "node --disable-warning=ExperimentalWarning src/import-ibkr.js",
     "import-mak": "node --disable-warning=ExperimentalWarning src/import-mak.js"
   },

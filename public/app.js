@@ -271,12 +271,12 @@ function optionFull(o) {
       <div><span>${esc(o.underlying)} move to strike</span><b>${pct(-o.otm_pct)}</b></div>
       <div><span>Days to expiry</span><b>${o.dte}</b></div>
       <div><span>Bid / Ask</span><b>${num(o.quote.bid)} / ${num(o.quote.ask)}</b></div>
-      <div><span>Mid (per share)</span><b>${num(o.quote.mid)}</b></div>
+      <div><span>Mid (per share)</span><b>${num(o.quote.mid)}</b>${o.quote.estimated ? '<span>ESTIMATED (no live quote)</span>' : ''}</div>
       <div><span>Value</span><b>${money(o.value_usd, 'USD')}</b><span>${huf(o.value_huf)}</span></div>
       <div><span>Paid</span><b>${money(o.cost_usd, 'USD')}</b><span>${num(o.purchase_price)} on ${fmtDate(o.purchase_date)}</span></div>
       <div><span>P&amp;L</span><b>${signed(money(o.pnl_usd, 'USD'), o.pnl_usd)}</b><span>${signed(pct(o.pnl_usd / o.cost_usd), o.pnl_usd)}</span></div>
       <div><span>${esc(o.underlying)} at purchase</span><b>${num(o.underlying_at_purchase)}</b></div>
-      <div><span>IV now (model)</span><b>${pct(o.iv, 2)}</b><span>CBOE ${pct(o.quote.cboe_iv, 2)}</span></div>
+      <div><span>IV now (model)</span><b>${pct(o.iv, 2)}</b><span>market ${pct(o.quote.market_iv, 2)}</span></div>
       <div><span>IV at purchase</span><b>${pct(o.iv_at_purchase, 2)}</b></div>
       <div><span>Delta</span><b>${num(g.delta, 4)}</b><span>${money(g.delta_usd_per_1pct, 'USD')} per +1% ${esc(o.underlying)}</span></div>
       <div><span>Theta / day</span><b>${money(g.theta_day_usd, 'USD')}</b></div>
@@ -397,7 +397,8 @@ async function loadRoll(o) {
       <tbody>${row(r.current, true)}${r.candidates.map((x) => row(x, false)).join('')}</tbody></table></div>
       <p class="muted small">For each listed expiry, the strikes just below/above insurance 100. Roll cost: sell current at bid, buy new at ask, plus commissions.
       Monthly decay: value lost over 30 days if ${esc(o.underlying)} and IV stay where they are (time decay only; a rising index costs extra, a falling one pays).
-      Insurance of a new contract uses its market IV shifted by the vol change since your purchase (${pct(r.vol_shift, 2)}), so today's vol level doesn't count.</p>`;
+      Insurance of a new contract uses its market IV shifted by the vol change since your purchase (${pct(r.vol_shift, 2)}), so today's vol level doesn't count.
+      Chain prices as of ${esc(new Date(r.timestamp).toLocaleString())}.</p>`;
   } catch (e) {
     el.innerHTML = `<p class="muted small">Roll analysis unavailable: ${esc(e.message)}</p>`;
   }
