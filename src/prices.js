@@ -49,6 +49,28 @@ export function yahooQuote(symbol) {
   });
 }
 
+// Find the Yahoo symbol for an exchange ticker (e.g. MFEH -> MFEH.DE) that trades in `currency`.
+export async function yahooFindSymbol(ticker, currency) {
+  let quotes = [];
+  try {
+    const j = await getJson(`https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=15&newsCount=0`);
+    quotes = j.quotes || [];
+  } catch (e) {
+    console.warn(`[prices] symbol search ${ticker}: ${e.message}`);
+    return null;
+  }
+  const pref = ['DE', 'AS', 'PA', 'MI', 'SW', 'L', ''];
+  const rank = (sym) => { const i = pref.indexOf(sym.includes('.') ? sym.split('.').pop() : ''); return i < 0 ? 99 : i; };
+  const cands = quotes
+    .filter((q) => q.symbol && q.symbol.split('.')[0].toUpperCase() === ticker.toUpperCase() && ['ETF', 'EQUITY', 'MUTUALFUND'].includes(q.quoteType))
+    .sort((a, b) => rank(a.symbol) - rank(b.symbol));
+  for (const c of cands) {
+    const q = await yahooQuote(c.symbol);
+    if (q && q.currency === currency) return c.symbol;
+  }
+  return null;
+}
+
 // Highest daily high over the past year (for drawdown). Cached 1 hour.
 export function yahoo52wHigh(symbol) {
   return cached(`y52:${symbol}`, 60 * 60 * 1000, async () => {

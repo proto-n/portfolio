@@ -128,6 +128,12 @@ if (!bondCols.includes('source_key')) {
   db.exec('ALTER TABLE bonds ADD COLUMN source_key TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS bonds_source_key ON bonds(source_key)');
 }
+// every IBKR transaction ever imported (deduplicated); positions and cash are derived from it
+db.exec(`CREATE TABLE IF NOT EXISTS ibkr_ledger (
+  key TEXT PRIMARY KEY, date TEXT NOT NULL, account TEXT NOT NULL, type TEXT, description TEXT,
+  symbol TEXT, qty REAL, price REAL, ccy TEXT, gross REAL, commission REAL, net REAL NOT NULL,
+  imported_at TEXT NOT NULL)`);
+db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
 db.exec('CREATE TABLE IF NOT EXISTS imported_keys (key TEXT PRIMARY KEY, at TEXT NOT NULL)');
 
 const DEFAULT_SETTINGS = {
@@ -160,6 +166,9 @@ export function getSettings() {
   for (const r of db.prepare('SELECT key, value FROM settings').all()) out[r.key] = Number(r.value);
   return out;
 }
+
+export const getMeta = (k) => db.prepare('SELECT value FROM meta WHERE key = ?').get(k)?.value ?? null;
+export const setMeta = (k, v) => db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(k, String(v));
 
 export const all = (sql, ...p) => db.prepare(sql).all(...p);
 export const get = (sql, ...p) => db.prepare(sql).get(...p);

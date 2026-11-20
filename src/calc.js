@@ -13,7 +13,8 @@ export function xirr(flows) {
   if (!flows.some((f) => f.amount < 0) || !flows.some((f) => f.amount > 0)) return null;
   const t0 = flows.reduce((m, f) => (f.date < m ? f.date : m), flows[0].date);
   const ts = flows.map((f) => ({ t: daysBetween(t0, f.date) / 365, a: f.amount }));
-  if (Math.max(...ts.map((x) => x.t)) < 1 / 365) return null;
+  // annualising a few days of noise is meaningless (a 0.1% wobble over 1 day is -30%/year)
+  if (Math.max(...ts.map((x) => x.t)) < 30 / 365) return null;
   const npv = (r) => ts.reduce((s, x) => s + x.a / Math.pow(1 + r, x.t), 0);
   // bisection on (-0.9999, 100) — robust and plenty precise here
   let lo = -0.9999, hi = 100;

@@ -330,7 +330,7 @@ async function renderAccount(id) {
     <div class="card"><h2>Add purchase / sale</h2><div id="lot-editor"></div></div>
     <div class="card"><h2>Cash</h2><div id="cash-editor"></div></div>
     <div class="card"><h2>Options on this account</h2><div id="opt-editor"></div></div>
-    <p class="muted small">Yearly (XIRR): the fixed annual rate at which the exact amounts you invested, on the dates you invested them, would have grown into today's value. HUF figures convert each purchase at that day's FX rate.</p>`;
+    <p class="muted small">Yearly (XIRR): the fixed annual rate at which the exact amounts you invested, on the dates you invested them, would have grown into today's value. HUF figures convert each purchase at that day's FX rate. Shown once a position is at least 30 days old.</p>`;
 
   for (const o of a.options) if (o.quote) loadRoll(o);
   const lots = await api('GET', '/api/lots');
@@ -453,8 +453,9 @@ async function renderManage(tab) {
 
   if (tab === 'import') {
     el.innerHTML = `<h2>Import IBKR transaction history</h2>
-      <p class="muted small">IBKR → Performance &amp; Reports → Transaction History → CSV. Export from account opening each time:
-      re-importing is safe (purchases are updated, not duplicated) and cash balances are recomputed from the full history.</p>
+      <p class="muted small">IBKR → Performance &amp; Reports → Transaction History → CSV, any period (the 7-day one is fine).
+      Transactions already imported are recognised and skipped, so overlapping uploads are safe. Cash balances need one
+      full-history export (from account opening) the first time.</p>
       <form class="editor"><label>CSV file<input type="file" name="file" accept=".csv,text/csv" required></label>
       <div class="actions"><button class="primary">Import</button></div></form>
       <h2 style="margin-top:24px">Import Kincstár (MÁK) portfolio</h2>

@@ -17,10 +17,22 @@ app.use(express.json());
 
 if (PASS) {
   const expected = Buffer.from(`${USER}:${PASS}`);
+  // "Remember me": after one basic-auth login, a cookie derived from the credentials lets the
+  // browser in without the prompt. It's re-set on every request, so it only expires after
+  // 400 days of not visiting (Chrome's cap); changing the password invalidates it.
+  const COOKIE = 'pf_auth';
+  const token = crypto.createHmac('sha256', `${USER}:${PASS}`).update('portfolio-remember-v1').digest('hex');
+  const tokenBuf = Buffer.from(token);
+  const eq = (a, b) => a.length === b.length && crypto.timingSafeEqual(a, b);
   app.use((req, res, next) => {
     const m = /^Basic (.+)$/.exec(req.headers.authorization || '');
     const got = m ? Buffer.from(Buffer.from(m[1], 'base64').toString()) : Buffer.alloc(0);
-    if (got.length === expected.length && crypto.timingSafeEqual(got, expected)) return next();
+    const cookie = /(?:^|;\s*)pf_auth=([0-9a-f]+)/.exec(req.headers.cookie || '')?.[1];
+    if (eq(got, expected) || (cookie && eq(Buffer.from(cookie), tokenBuf))) {
+      const https = req.headers['x-forwarded-proto'] === 'https';
+      res.append('Set-Cookie', `${COOKIE}=${token}; Max-Age=${400 * 86400}; Path=/; HttpOnly; SameSite=Lax${https ? '; Secure' : ''}`);
+      return next();
+    }
     res.set('WWW-Authenticate', 'Basic realm="portfolio"').status(401).send('Auth required');
   });
 }
@@ -86,7 +98,7 @@ app.get('/api/history/:ref', wrap(async (req, res) => {
   res.json(all('SELECT date, value_native, value_huf FROM snapshots WHERE ref = ? ORDER BY date', req.params.ref));
 }));
 
-app.post('/api/import/ibkr', express.text({ type: '*/*', limit: '20mb' }), wrap(async (req, res) => res.json(importIbkrCsv(req.body))));
+app.post('/api/import/ibkr', express.text({ type: '*/*', limit: '20mb' }), wrap(async (req, res) => res.json(await importIbkrCsv(req.body))));
 
 app.post('/api/import/mak', express.raw({ type: '*/*', limit: '20mb' }), wrap(async (req, res) => res.json(importMakXls(req.body))));
 

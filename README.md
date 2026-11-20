@@ -34,15 +34,32 @@ Restart=always
 
 Or, instead of the built-in scheduler, crontab: `30 23 * * * cd /path/to/portfolio && NO_SCHEDULER=1 npm run snapshot`
 
+## Deployment
+
+Live at https://portfolio.mormota.xyz (Cloudflare → nginx in `csincsi-infra` → `portfolio` container,
+Node 22, code at `/root/portfolio` on the `csincsi` host). Credentials live in `/root/portfolio/.env`
+on the host, the live database in `/root/portfolio/data/`. `./deploy.sh` rsyncs the code and restarts
+the container; it never touches the host's database or `.env`.
+
+After one basic-auth login the app sets a `pf_auth` cookie (HMAC of the credentials, renewed on every
+request, 400 days), so the prompt doesn't come back; changing the password logs every browser out.
+
 ## Importing IBKR history
 
-IBKR → Performance & Reports → Transaction History → CSV, **from account opening to today**. Then either
-Manage → Import IBKR in the UI, or `npm run import-ibkr -- file.csv`.
+IBKR → Performance & Reports → Transaction History → CSV, any period (the 7-day one is fine). Upload in
+Manage → Import IBKR, or `npm run import-ibkr -- file.csv`.
 
-- ETF/stock fills are merged per day/account/instrument into one lot; the HUF rate is the one IBKR actually used (gross HUF ÷ EUR amount), commissions are converted back to the instrument currency.
-- Option buys become option positions (purchase date/price/fees); option sells reduce/close the matching position (for rolls).
-- Cash per account = sum of all net amounts (base currency HUF), which is why the export must start at account opening.
-- Re-importing is idempotent. Sells of positions whose purchase isn't in the file are skipped and listed.
+- Every transaction is stored once in `ibkr_ledger` (keyed by its content + occurrence number), so
+  overlapping or repeated uploads are safe; positions and cash are rebuilt from the ledger.
+- Cash needs one full-history export (from account opening) the first time. After that, per-account
+  cash = sum of ledger amounts (HUF base), trued up to IBKR's reported ending cash (the difference is
+  the "FX Translations P&L" revaluation, which is period-dependent and not stored as a transaction).
+- ETF/stock fills are merged per day/account/instrument/side into one lot; the HUF rate is the one IBKR
+  actually used; commissions are converted back to the instrument currency.
+- New instruments get their Yahoo symbol looked up automatically (same ticker, same currency, Xetra first).
+- Option buys become option positions; option sells reduce/close the matching position (rolls).
+- The referral-bonus IBKR shares are ignored as a position (`IGNORED_SYMBOLS`); their sale proceeds and
+  dividends still count toward cash. Other sells without a recorded purchase are skipped and listed.
 - `TBSZ-YYYY` maps to account `tbszYYYY`; the main account maps to `cash`.
 
 ## Importing Kincstár (MÁK) bonds
